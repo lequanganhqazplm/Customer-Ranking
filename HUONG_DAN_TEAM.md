@@ -69,6 +69,16 @@ Có thể truyền --data, --clusters, --test-size và --random-state. Run lưu 
 
 Pipeline mô tả cụm cũ python -m src.train_kmeans nay dừng trước khi đọc dữ liệu nếu phát hiện bất kỳ đầu ra cố định nào đã tồn tại. Nó không ghi đè models/, outputs/ hoặc file processed cũ.
 
+### Huấn luyện Decision Tree
+
+Decision Tree phân loại trực tiếp CustomerRank bằng đúng FEATURE_COLUMNS, không dùng scaler. Mặc định cây được giới hạn với max_depth=5, min_samples_split=20, min_samples_leaf=10 và random_state=42. Pipeline dùng split_customer_dataset với test_size=0.2 và random_state=42; P50/P85 và nhãn train/test được tạo theo quy tắc train-only hiện hành. Test chỉ dùng để đánh giá, không dùng huấn luyện hoặc chọn tham số.
+
+Chọn một thư mục run mới trước khi chạy:
+
+    python -m src.train_decision_tree --output-dir outputs/runs/rank-decision-tree-run-01
+
+Có thể truyền --data, --test-size, --random-state, --max-depth, --min-samples-split và --min-samples-leaf. src.data_loader.load_data đọc Excel, kiểm tra file và các cột giao dịch bắt buộc, không sửa dữ liệu nguồn. Run lưu model.joblib, ranking_metrics.csv, test_predictions.csv và run_metadata.json; thư mục đã tồn tại sẽ bị từ chối. Evaluation_Set_ID dùng cùng phép băm CustomerID của K-Means để xác nhận cùng test split. Dashboard/MODEL_CATALOG chưa được tích hợp Decision Tree trong phạm vi triển khai này.
+
 ## 5. API đánh giá chung
 
 Trong src/evaluate.py:
@@ -104,7 +114,7 @@ Ví dụ tích hợp mô hình mới:
 |---|---|---|
 | K-Means | Clustering, map sang rank | Đã chạy trên Excel gốc, holdout 674 khách, mapping train-only; kết quả nằm trong run hiện hành |
 | Logistic Regression | Classification | Chưa triển khai |
-| Decision Tree | Classification | Chưa triển khai |
+| Decision Tree | Classification | Đã triển khai pipeline; chưa chạy trên dữ liệu thật |
 | Random Forest | Classification | Chưa triển khai |
 | Gradient Boosting | Classification | Chưa triển khai |
 | KNN | Classification | Chưa triển khai |
@@ -133,7 +143,11 @@ Chạy bộ test mà không dùng dataset thật:
 
     python -m pytest -q -p no:cacheprovider --basetemp <thu_muc_tam_duoc_phep>
 
-Test tạo giao dịch tổng hợp và ghi file chỉ trong thư mục tạm. Không chạy huấn luyện trên dữ liệu thật trong kiểm thử mặc định. Trước khi dùng CLI trên dữ liệu thật, chọn --output-dir mới. Không xóa hoặc thay thế data/raw/Online Retail.xlsx, model, CSV, hình hoặc báo cáo hiện có.
+Test tạo giao dịch tổng hợp và workbook Excel tổng hợp, chỉ ghi vào thư mục tạm. Có thể chạy riêng các test pipeline mới:
+
+    python -m pytest -q -p no:cacheprovider --basetemp <thu_muc_tam_duoc_phep> tests/test_decision_tree_pipeline.py tests/test_data_loader.py
+
+Không chạy huấn luyện trên dữ liệu thật trong kiểm thử mặc định. Trước khi dùng CLI trên dữ liệu thật, chọn --output-dir mới. Không xóa hoặc thay thế data/raw/Online Retail.xlsx, model, CSV, hình hoặc báo cáo hiện có.
 
 ## 9. Artifact lịch sử và giới hạn hiện tại
 
