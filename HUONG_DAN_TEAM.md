@@ -77,7 +77,7 @@ Chọn một thư mục run mới trước khi chạy:
 
     python -m src.train_decision_tree --output-dir outputs/runs/rank-decision-tree-run-01
 
-Có thể truyền --data, --test-size, --random-state, --max-depth, --min-samples-split và --min-samples-leaf. src.data_loader.load_data đọc Excel, kiểm tra file và các cột giao dịch bắt buộc, không sửa dữ liệu nguồn. Run lưu model.joblib, ranking_metrics.csv, test_predictions.csv và run_metadata.json; thư mục đã tồn tại sẽ bị từ chối. Evaluation_Set_ID dùng cùng phép băm CustomerID của K-Means để xác nhận cùng test split. Dashboard/MODEL_CATALOG chưa được tích hợp Decision Tree trong phạm vi triển khai này.
+Có thể truyền --data, --test-size, --random-state, --max-depth, --min-samples-split và --min-samples-leaf. src.data_loader.load_data đọc Excel, kiểm tra file và các cột giao dịch bắt buộc, không sửa dữ liệu nguồn. Run lưu model.joblib, ranking_metrics.csv, test_predictions.csv và run_metadata.json; thư mục đã tồn tại sẽ bị từ chối. Evaluation_Set_ID dùng cùng phép băm CustomerID của K-Means để xác nhận cùng test split. Dashboard đọc metadata và dự đoán từ run Decision Tree, hiển thị metric, cấu hình mô hình, phân bố nhãn và bảng dự đoán; run thiếu hoặc sai schema không được tính vào so sánh.
 
 ## 5. API đánh giá chung
 
@@ -114,7 +114,7 @@ Ví dụ tích hợp mô hình mới:
 |---|---|---|
 | K-Means | Clustering, map sang rank | Đã chạy trên Excel gốc, holdout 674 khách, mapping train-only; kết quả nằm trong run hiện hành |
 | Logistic Regression | Classification | Chưa triển khai |
-| Decision Tree | Classification | Đã triển khai pipeline; chưa chạy trên dữ liệu thật |
+| Decision Tree | Classification | Đã triển khai và có kết quả holdout trong `outputs/runs/rank-decision-tree-run-01/` |
 | Random Forest | Classification | Chưa triển khai |
 | Gradient Boosting | Classification | Chưa triển khai |
 | KNN | Classification | Chưa triển khai |
@@ -131,11 +131,11 @@ Chạy:
 
     streamlit run app.py
 
-Sidebar có bốn mục: **Tổng quan**, **Mô hình**, **So sánh mô hình**, **Dữ liệu khách hàng**. Trong Mô hình, chọn một trong 10 tên. K-Means đọc mapping và dự đoán test từ run có metadata hiện hành; báo cáo feature lịch sử được dùng riêng để tra cứu và không được hiểu là dự đoán cả cohort. CustomerRank dự đoán và ClusterID chỉ có cho các khách ở test trong run. Mô hình chưa triển khai hiển thị trạng thái riêng. Bảng so sánh chỉ lấy các dòng completed có cùng Evaluation_Set_ID; dòng thiếu ID hoặc dùng split khác bị loại khỏi so sánh và được ghi rõ. `model_metrics.csv` cũ có Silhouette/Inertia không được coi là bảng năm metric.
+Sidebar có bốn mục: **Tổng quan**, **Mô hình**, **So sánh mô hình**, **Dữ liệu khách hàng**. Trong Mô hình, chọn một trong 10 tên. K-Means đọc mapping và dự đoán test từ run có metadata hiện hành; Decision Tree hiển thị kết quả và dự đoán test riêng từ run có metadata tương ứng. Báo cáo feature lịch sử được dùng riêng để tra cứu và không được hiểu là dự đoán cả cohort. CustomerRank dự đoán và ClusterID trong trang tra cứu chỉ có cho các khách ở holdout K-Means, không được thay bằng đầu ra Decision Tree. Mô hình chưa triển khai hiển thị trạng thái riêng. Bảng so sánh chỉ lấy các dòng completed có cùng Evaluation_Set_ID; dòng thiếu ID hoặc dùng split khác bị loại khỏi so sánh và được ghi rõ. `model_metrics.csv` cũ có Silhouette/Inertia không được coi là bảng năm metric.
 
 `customer_clusters.csv` và `cluster_summary.csv` là báo cáo phân cụm lịch sử; ClusterID cũ không phải nhãn CustomerRank tương lai. Dashboard dùng `data/processed/customer_features.csv` cho tra cứu, không đọc/hiển thị cluster cũ như cluster của run phân hạng. CustomerRank_predicted và ClusterID được ghép từ test_predictions.csv của run hiện hành; khách không nằm trong holdout sẽ để trống hai cột đó. Nguồn và cutoff từ metadata được hiển thị. Khi file thiếu hoặc sai schema, dashboard hiển thị trạng thái thay vì crash hoặc tạo số mặc định.
 
-Run dữ liệu thật được lưu độc lập tại `outputs/runs/rank-kmeans-rfm-map-20261028/`; không ghi đè `rank-kmeans-run-01` hoặc artifact lịch sử. Run có Accuracy 0.4228, Precision Macro 0.5113, Recall Macro 0.3451, F1 Macro 0.3398 và Balanced Accuracy 0.3451. Chỉ K-Means có kết quả hiện tại nên chưa thể kết luận mô hình tốt nhất. Silhouette 0.3781 và Inertia 7263.55 là chẩn đoán train-only, tách biệt với năm chỉ số phân hạng.
+Run dữ liệu thật K-Means và Decision Tree được lưu riêng trong `outputs/runs/`. Dashboard đọc metric từ CSV đã lưu, không hardcode chỉ số; chỉ so sánh các mô hình có cùng Evaluation_Set_ID. Chỉ số K-Means train-only (Silhouette/Inertia) là chẩn đoán phân cụm, tách biệt với năm chỉ số phân hạng.
 
 ## 8. Kiểm thử và an toàn artifact
 

@@ -15,6 +15,7 @@ from src.dashboard_helpers import (
     RANK_ORDER,
     available_model_results,
     comparable_model_results,
+    load_dt_run,
     read_csv_report,
     validate_feature_report,
     validate_model_results,
@@ -163,6 +164,7 @@ if customers is not None:
 
 rank_results, rank_result_warnings = load_ranking_results()
 rank_metadata, rank_predictions, rank_run_path, rank_run_error = load_latest_rank_run()
+dt_metadata, dt_predictions, dt_run_path, dt_run_error = load_dt_run(RUNS_DIR)
 if rank_results is not None and not rank_results.empty and (
     rank_metadata is None or rank_predictions is None or rank_run_error
 ):
@@ -170,6 +172,13 @@ if rank_results is not None and not rank_results.empty and (
     if stale_rank.any():
         rank_results = rank_results.loc[~stale_rank].reset_index(drop=True)
         rank_result_warnings.append("K-Means chưa có kết quả ánh xạ và dự đoán hợp lệ nên đã được loại khỏi so sánh.")
+if rank_results is not None and not rank_results.empty and (
+    dt_metadata is None or dt_predictions is None or dt_run_error
+):
+    stale_dt = rank_results["Model"].astype(str).eq("Decision Tree")
+    if stale_dt.any():
+        rank_results = rank_results.loc[~stale_dt].reset_index(drop=True)
+        rank_result_warnings.append("Decision Tree chưa có dự đoán hợp lệ nên đã được loại khỏi so sánh.")
 completed_results = available_model_results(rank_results)
 comparison_results, excluded_models, comparison_warning = comparable_model_results(rank_results)
 
@@ -331,6 +340,76 @@ def render_kmeans_model():
             )
 
 
+def render_decision_tree_model():
+    st.subheader("Cây quyết định (Decision Tree)")
+    st.write(
+        "Decision Tree học các quy tắc phân nhánh từ đặc trưng mua hàng để dự đoán hạng khách hàng. "
+        "Các chỉ số dưới đây được tính trên tập kiểm tra đã lưu cùng lần chạy."
+    )
+
+    result = completed_results.get("Decision Tree")
+    if result is not None:
+        st.success("Đã có kết quả phân hạng trên tập kiểm tra.")
+        render_metric_cards(result)
+    elif dt_run_error:
+        st.warning("Chưa thể hiển thị kết quả Decision Tree vì dữ liệu lần chạy không đầy đủ hoặc không hợp lệ.")
+    else:
+        st.info("Chưa có kết quả đánh giá Decision Tree.")
+
+    if dt_metadata is None:
+        return
+    if dt_predictions is None:
+        return
+
+    kpi1, kpi2 = st.columns(2)
+    train_count = dt_metadata.get("n_train_customers")
+    train_count_text = f"{train_count:,}" if isinstance(train_count, int) else "Chưa có dữ liệu"
+    kpi1.metric("Khách hàng dùng để huấn luyện", train_count_text)
+    kpi2.metric("Khách hàng trong tập kiểm tra", f"{len(dt_predictions):,}")
+
+    start = pd.to_datetime(dt_metadata.get("prediction_window_start"), errors="coerce")
+    end = pd.to_datetime(dt_metadata.get("observation_end"), errors="coerce")
+    if pd.notna(start) or pd.notna(end):
+        start_text = start.strftime("%d/%m/%Y %H:%M") if pd.notna(start) else "chưa rõ"
+        end_text = end.strftime("%d/%m/%Y %H:%M") if pd.notna(end) else "chưa rõ"
+        st.caption(f"Phạm vi dữ liệu: giao dịch trước {start_text}; kỳ đánh giá kết thúc {end_text}.")
+
+    parameters = dt_metadata.get("model_parameters")
+    if isinstance(parameters, dict) and parameters:
+        st.caption(
+            "Tham số mô hình: "
+            + ", ".join(f"{key} = {value}" for key, value in parameters.items())
+        )
+
+    with st.expander("Xem phân bố hạng và dự đoán trên tập kiểm tra"):
+        counts = []
+        for rank in RANK_ORDER:
+            actual_count = int(dt_predictions["CustomerRank_true"].eq(rank).sum())
+            predicted_count = int(dt_predictions["CustomerRank_predicted"].eq(rank).sum())
+            counts.append(
+                {
+                    "Hạng khách hàng": RANK_DISPLAY_NAMES[rank],
+                    "Thực tế": actual_count,
+                    "Dự đoán": predicted_count,
+                }
+            )
+        st.dataframe(pd.DataFrame(counts), width="stretch", hide_index=True)
+
+        prediction_view = dt_predictions[
+            ["CustomerID", "CustomerRank_true", "CustomerRank_predicted"]
+        ].rename(
+            columns={
+                "CustomerID": "Mã khách hàng",
+                "CustomerRank_true": "Hạng thực tế",
+                "CustomerRank_predicted": "Hạng dự đoán",
+            }
+        )
+        prediction_view["Hạng thực tế"] = prediction_view["Hạng thực tế"].map(rank_name)
+        prediction_view["Hạng dự đoán"] = prediction_view["Hạng dự đoán"].map(rank_name)
+        st.dataframe(prediction_view, width="stretch", hide_index=True)
+    st.caption("Kết quả phản ánh một lần chia tập kiểm tra; chưa phải đánh giá qua nhiều giai đoạn.")
+
+
 with st.sidebar:
     st.title("Phân hạng khách hàng")
     page = st.radio("Điều hướng", ["Tổng quan", "Mô hình", "So sánh mô hình", "Dữ liệu khách hàng"])
@@ -397,6 +476,8 @@ elif page == "Mô hình":
     st.caption(f"Loại mô hình: {MODEL_TYPE_NAMES.get(model_info['type'], model_info['type'])}")
     if selected == "K-Means":
         render_kmeans_model()
+    elif selected == "Decision Tree":
+        render_decision_tree_model()
     elif not model_info["implemented"]:
         st.info("Chưa triển khai")
     else:
