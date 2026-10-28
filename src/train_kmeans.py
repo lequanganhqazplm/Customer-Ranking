@@ -61,6 +61,29 @@ def _ensure_dirs():
         (PROJECT_ROOT / sub).mkdir(parents=True, exist_ok=True)
 
 
+def _ensure_output_paths_available():
+    """Refuse to start when any legacy pipeline artifact could be replaced."""
+    relative_paths = (
+        "models/scaler.pkl",
+        "models/kmeans.pkl",
+        "outputs/metrics/kmeans_eval.csv",
+        "outputs/metrics/model_metrics.csv",
+        "outputs/reports/customer_clusters.csv",
+        "outputs/reports/cluster_summary.csv",
+        "outputs/figures/elbow.png",
+        "outputs/figures/silhouette.png",
+        "outputs/figures/cluster_bar.png",
+        "outputs/figures/rfm_scatter.png",
+    )
+    collisions = [str(PROJECT_ROOT / path) for path in relative_paths if (PROJECT_ROOT / path).exists()]
+    if collisions:
+        raise FileExistsError(
+            "Legacy K-Means pipeline stopped before reading/training on data because it would overwrite "
+            "existing artifacts. Use a new protected run directory with `python -m src.train --output-dir ...` "
+            "or move/protect the artifacts explicitly. Conflicts: " + ", ".join(collisions)
+        )
+
+
 def _save_elbow_figure(k_values, inertias, path):
     """Save the Elbow Method chart."""
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -130,6 +153,8 @@ def _save_rfm_scatter(features, labels, path):
 
 # ── Main entry point ────────────────────────────────────────────────────────
 def main():
+    # Validate every fixed output before creating directories or loading data.
+    _ensure_output_paths_available()
     _ensure_dirs()
 
     # 1. Load ----------------------------------------------------------------

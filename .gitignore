@@ -26,6 +26,7 @@ models/*.joblib
 outputs/metrics/*
 outputs/figures/*
 outputs/reports/*
+outputs/runs/*
 
 # Keep empty directories
 !data/raw/.gitkeep
