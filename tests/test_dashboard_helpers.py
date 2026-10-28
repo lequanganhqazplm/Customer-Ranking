@@ -17,7 +17,9 @@ from src.dashboard_helpers import (
     build_cluster_labels,
     comparable_model_results,
     read_csv_report,
+    load_dt_run,
     reconcile_cluster_summary,
+    validate_dt_predictions,
     validate_test_predictions,
     validate_model_results,
     validate_customer_report,
@@ -155,7 +157,8 @@ def test_model_catalog_contains_exactly_ten_distinct_algorithms():
     assert len(names) == 10
     assert len(set(names)) == 10
     assert names[0] == "K-Means"
-    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 1
+    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 2
+    assert next(item for item in MODEL_CATALOG if item["name"] == "Decision Tree")["implemented"]
 
 
 def test_model_comparison_rejects_legacy_or_incomplete_schema_and_warns_on_test_mismatch():
@@ -226,6 +229,45 @@ def test_test_predictions_validate_four_labels_and_preserve_cluster_ids():
     malformed, error = validate_test_predictions(data.assign(CustomerRank_predicted="VIP"))
     assert malformed is None
     assert "nhãn không hợp lệ" in error
+
+
+def test_decision_tree_predictions_validate_without_a_cluster_column():
+    data = pd.DataFrame(
+        {
+            "CustomerID": [14646, 14911],
+            "CustomerRank_true": ["Diamond", "Gold"],
+            "CustomerRank_predicted": ["Gold", "Silver"],
+        }
+    )
+    result, error = validate_dt_predictions(data)
+    assert error is None
+    assert result["CustomerID"].tolist() == ["14646", "14911"]
+    assert "ClusterID" not in result.columns
+
+    invalid, error = validate_dt_predictions(data.assign(CustomerRank_predicted="VIP"))
+    assert invalid is None
+    assert "nhãn không hợp lệ" in error
+
+
+def test_load_dt_run_reads_and_validates_latest_decision_tree_artifacts(tmp_path):
+    run_path = tmp_path / "decision-tree-run"
+    run_path.mkdir()
+    (run_path / "ranking_metrics.csv").write_text("Model\nDecision Tree\n", encoding="utf-8")
+    (run_path / "run_metadata.json").write_text(
+        '{"model": "Decision Tree", "n_test_customers": 2}', encoding="utf-8"
+    )
+    (run_path / "test_predictions.csv").write_text(
+        "CustomerID,CustomerRank_true,CustomerRank_predicted\n"
+        "14646,Diamond,Gold\n14911,Gold,Gold\n",
+        encoding="utf-8",
+    )
+
+    metadata, predictions, loaded_path, error = load_dt_run(tmp_path)
+
+    assert error is None
+    assert metadata["model"] == "Decision Tree"
+    assert predictions["CustomerID"].tolist() == ["14646", "14911"]
+    assert loaded_path == run_path
 
 
 def test_comparison_rejects_unidentified_test_set():

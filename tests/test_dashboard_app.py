@@ -31,6 +31,15 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
         if not model_info["implemented"]:
             assert any("Chưa triển khai" in item.value for item in app.info)
             assert len(app.metric) == 0
+        elif model_info["name"] == "Decision Tree" and (
+            Path(__file__).resolve().parents[1]
+            / "outputs"
+            / "runs"
+            / "rank-decision-tree-run-01"
+            / "test_predictions.csv"
+        ).is_file():
+            assert any("Độ chính xác" in metric.label for metric in app.metric)
+            assert any("Cây quyết định" in element.value for element in app.subheader)
 
     app.selectbox[0].set_value("K-Means (phân cụm)").run()
     assert not app.exception
@@ -56,10 +65,12 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
                 if {"Mô hình", "Trạng thái"}.issubset(set(table.value.columns))
             )
             assert len(status_table) == 10
-            assert (status_table["Trạng thái"] == "Chưa triển khai").sum() == 9
-            assert any(
-                "Hiện mới có một mô hình được đánh giá. Chưa đủ dữ liệu để kết luận mô hình nào tốt nhất." in item.value
-                for item in app.info
+            assert (status_table["Trạng thái"] == "Chưa triển khai").sum() == 8
+            assert (
+                status_table.loc[
+                    status_table["Mô hình"] == "Cây quyết định (Decision Tree)", "Trạng thái"
+                ].iloc[0]
+                == "Đã đánh giá"
             )
             visible_captions = [item.value for item in app.caption]
             assert all("Evaluation_Set_ID" not in caption for caption in visible_captions)
