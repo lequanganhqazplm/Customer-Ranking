@@ -25,12 +25,19 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
     ]
     assert model_selector.options == displayed_names
 
+    train_selector = next(widget for widget in app.selectbox if widget.label == "Chọn mô hình huấn luyện")
+    assert "Cây quyết định (Decision Tree)" in train_selector.options
+
     for model_info, display_name in zip(MODEL_CATALOG, displayed_names):
         app.selectbox[0].set_value(display_name).run()
         assert not app.exception
         if not model_info["implemented"]:
             assert any("Chưa triển khai" in item.value for item in app.info)
             assert len(app.metric) == 0
+
+    app.selectbox[0].set_value("Cây quyết định (Decision Tree)").run()
+    assert not app.exception
+    assert any("Cây quyết định (Decision Tree)" in element.value for element in app.subheader)
 
     app.selectbox[0].set_value("K-Means (phân cụm)").run()
     assert not app.exception
@@ -56,7 +63,7 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
                 if {"Mô hình", "Trạng thái"}.issubset(set(table.value.columns))
             )
             assert len(status_table) == 10
-            assert (status_table["Trạng thái"] == "Chưa triển khai").sum() == 9
+            assert (status_table["Trạng thái"] == "Chưa triển khai").sum() == 8
             assert any(
                 "Hiện mới có một mô hình được đánh giá. Chưa đủ dữ liệu để kết luận mô hình nào tốt nhất." in item.value
                 for item in app.info
