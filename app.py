@@ -409,6 +409,46 @@ with st.sidebar:
     st.title("Phân hạng khách hàng")
     page = st.radio("Điều hướng", ["Tổng quan", "Mô hình", "So sánh mô hình", "Dữ liệu khách hàng"])
 
+    st.markdown("---")
+    with st.expander("🚀 Huấn luyện mô hình từ UI", expanded=False):
+        st.write("Huấn luyện mô hình trực tiếp mà không cần dòng lệnh.")
+        trainable_models = ["Hồi quy tuyến tính (Linear Regression)", "K-Means (phân cụm)"]
+        selected_train_model = st.selectbox("Chọn mô hình huấn luyện", trainable_models, key="ui_train_model")
+        
+        train_test_size = st.slider("Tỷ lệ tập kiểm tra (Test size)", 0.1, 0.4, 0.2, step=0.05, key="ui_train_test_size")
+        train_clusters = 4
+        if "K-Means" in selected_train_model:
+            train_clusters = st.number_input("Số cụm K-Means", min_value=4, max_value=10, value=4, step=1, key="ui_train_clusters")
+            
+        if st.button("Bắt đầu huấn luyện", key="ui_train_button"):
+            from src.data_loader import load_data
+            from src.train import run_training, save_experiment
+            import datetime
+            
+            raw_data_file = DATA_ROOT / "raw" / "Online Retail.xlsx"
+            if not raw_data_file.is_file():
+                st.error("Không tìm thấy file data/raw/Online Retail.xlsx. Vui lòng đặt file vào thư mục data/raw/")
+            else:
+                with st.spinner("Đang đọc dữ liệu và huấn luyện mô hình... Vui lòng đợi trong giây lát."):
+                    try:
+                        transactions = load_data(raw_data_file)
+                        model_key = "linear_regression" if "Linear" in selected_train_model else "kmeans"
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                        out_dir = RUNS_DIR / f"rank-{model_key}-{timestamp}"
+                        
+                        train_result = run_training(
+                            transactions,
+                            model_name=model_key,
+                            n_clusters=int(train_clusters),
+                            test_size=float(train_test_size),
+                            random_state=42,
+                        )
+                        save_experiment(train_result, out_dir)
+                        st.success(f"Huấn luyện thành công! Kết quả lưu tại: {out_dir.name}")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Lỗi khi huấn luyện: {exc}")
+
 
 if page == "Tổng quan":
     st.title("Tổng quan")
