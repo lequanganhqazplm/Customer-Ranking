@@ -68,7 +68,7 @@ MODEL_CATALOG = (
     {"name": "Gradient Boosting", "type": "Classification", "implemented": False},
     {"name": "KNN", "type": "Classification", "implemented": False},
     {"name": "SVC", "type": "Classification", "implemented": False},
-    {"name": "Linear Regression", "type": "Regression", "implemented": False},
+    {"name": "Linear Regression", "type": "Regression", "implemented": True},
     {"name": "Ridge Regression", "type": "Regression", "implemented": False},
     {"name": "Random Forest Regressor", "type": "Regression", "implemented": False},
 )

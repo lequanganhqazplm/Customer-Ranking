@@ -109,7 +109,7 @@ Ví dụ tích hợp mô hình mới:
 | Gradient Boosting | Classification | Chưa triển khai |
 | KNN | Classification | Chưa triển khai |
 | SVC | Classification | Chưa triển khai |
-| Linear Regression | Regression | Chưa triển khai |
+| Linear Regression | Regression | Đã triển khai và đánh giá trên holdout 674 khách |
 | Ridge Regression | Regression | Chưa triển khai |
 | Random Forest Regressor | Regression | Chưa triển khai |
 

@@ -331,6 +331,80 @@ def render_kmeans_model():
             )
 
 
+
+def load_latest_linear_regression_run():
+    """Load latest Linear Regression run metadata and test predictions."""
+    if not RUNS_DIR.is_dir():
+        return None, None
+    candidates = sorted(
+        RUNS_DIR.glob("*/run_metadata.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for meta_path in candidates:
+        try:
+            with meta_path.open("r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+            if metadata.get("model") == "Linear Regression":
+                pred_path = meta_path.parent / "test_predictions.csv"
+                preds = pd.read_csv(pred_path) if pred_path.is_file() else None
+                return metadata, preds
+        except Exception:
+            continue
+    return None, None
+
+
+def render_linear_regression_model():
+    st.subheader("Hồi quy tuyến tính (Linear Regression)")
+    st.write(
+        "Mô hình Hồi quy tuyến tính dự đoán trực tiếp mức chi tiêu trong 90 ngày tới (FutureSpend) "
+        "dựa trên các đặc trưng hành vi lịch sử. Sau đó, mức chi tiêu dự đoán được chặn dưới tại 0 "
+        "và quy đổi sang 4 hạng (Bronze, Silver, Gold, Diamond) theo ngưỡng P50 và P85 học từ tập huấn luyện."
+    )
+    result = completed_results.get("Linear Regression")
+    if result is not None:
+        st.success("Đã có kết quả phân hạng trên tập kiểm tra.")
+        render_metric_cards(result)
+    else:
+        st.info("Chưa có kết quả đánh giá Hồi quy tuyến tính.")
+
+    lr_meta, lr_preds = load_latest_linear_regression_run()
+    if lr_meta is None:
+        return
+
+    thresholds = lr_meta.get("rank_thresholds", {})
+    t1, t2 = st.columns(2)
+    t1.metric("Ngưỡng P50 (Silver -> Gold)", f"£{float(thresholds.get('q50', 0)):,.2f}")
+    t2.metric("Ngưỡng P85 (Gold -> Diamond)", f"£{float(thresholds.get('q85', 0)):,.2f}")
+
+    coefs = pd.DataFrame(lr_meta.get("coefficients", []))
+    if not coefs.empty:
+        st.subheader("Trọng số ảnh hưởng của các đặc trưng (Feature Coefficients)")
+        st.write(
+            "Hệ số dương biểu thị đặc trưng thúc đẩy chi tiêu tương lai; "
+            "hệ số âm biểu thị đặc trưng làm giảm chi tiêu tương lai."
+        )
+        coef_display = coefs.copy()
+        coef_display["Tên đặc trưng"] = coef_display["Feature"].map(lambda f: FEATURE_NAMES.get(f, f))
+        coef_display["Hệ số (Beta)"] = coef_display["Coefficient"].map(lambda v: f"{v:,.2f}")
+        st.dataframe(coef_display[["Tên đặc trưng", "Feature", "Hệ số (Beta)"]], width="stretch", hide_index=True)
+        st.bar_chart(coefs.set_index("Feature")["Coefficient"])
+
+    if lr_preds is not None and not lr_preds.empty:
+        st.subheader("Phân bố hạng thực tế vs dự đoán trên tập kiểm tra")
+        actual = lr_preds["CustomerRank_true"].value_counts().reindex(RANK_ORDER, fill_value=0)
+        predicted = lr_preds["CustomerRank_predicted"].value_counts().reindex(RANK_ORDER, fill_value=0)
+        dist = pd.DataFrame(
+            {
+                "Hạng khách hàng": [RANK_DISPLAY_NAMES[r] for r in RANK_ORDER],
+                "Thực tế": actual.values,
+                "Dự đoán": predicted.values,
+            }
+        )
+        st.dataframe(dist, width="stretch", hide_index=True)
+        st.bar_chart(dist.set_index("Hạng khách hàng"), color=["#93a7b8", "#137c8b"])
+
+
 with st.sidebar:
     st.title("Phân hạng khách hàng")
     page = st.radio("Điều hướng", ["Tổng quan", "Mô hình", "So sánh mô hình", "Dữ liệu khách hàng"])
@@ -397,6 +471,8 @@ elif page == "Mô hình":
     st.caption(f"Loại mô hình: {MODEL_TYPE_NAMES.get(model_info['type'], model_info['type'])}")
     if selected == "K-Means":
         render_kmeans_model()
+    elif selected == "Linear Regression":
+        render_linear_regression_model()
     elif not model_info["implemented"]:
         st.info("Chưa triển khai")
     else:

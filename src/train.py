@@ -17,9 +17,10 @@ import joblib
 import pandas as pd
 
 from src.data_loader import load_data
-from src.evaluate import evaluate_classification, make_model_result, write_model_results
+from src.evaluate import evaluate_classification, evaluate_regression, make_model_result, write_model_results
 from src.feature_engineering import FEATURE_COLUMNS, build_customer_dataset, split_customer_dataset
 from src.models.kmeans_model import KMeansRankClassifier
+from src.models.linear_regression_model import LinearRegressionRankModel
 from src.preprocessing import clean_transactions
 
 
@@ -140,6 +141,105 @@ def train_kmeans_rank_model(
     }
 
 
+def train_linear_regression_rank_model(
+    dataset: pd.DataFrame,
+    *,
+    test_size: float = 0.2,
+    random_state: int = 42,
+):
+    """Fit Linear Regression on train rows and evaluate on test."""
+    if not isinstance(dataset, pd.DataFrame) or dataset.empty:
+        raise ValueError("dataset must be a non-empty customer DataFrame.")
+    required_targets = {"FutureSpend", "CustomerRank", "ReturnedNext90Days"}
+    if not required_targets.issubset(set(dataset.columns)):
+        missing_targets = sorted(required_targets - set(dataset.columns))
+        raise KeyError(f"Missing target columns: {', '.join(missing_targets)}")
+    missing_features = [column for column in FEATURE_COLUMNS if column not in dataset.columns]
+    if missing_features:
+        raise KeyError(f"Missing feature columns: {', '.join(missing_features)}")
+    if dataset["CustomerID"].isna().any() or dataset["CustomerID"].duplicated().any():
+        raise ValueError("CustomerID must be present and unique before model training.")
+
+    train, test, thresholds = split_customer_dataset(dataset, test_size=test_size, random_state=random_state)
+
+    model = LinearRegressionRankModel()
+    started = time.perf_counter()
+    model.fit(train[list(FEATURE_COLUMNS)], train["FutureSpend"], thresholds=thresholds)
+    training_time = time.perf_counter() - started
+
+    evaluation_set_id = _evaluation_set_id(test["CustomerID"])
+    if test.empty:
+        metrics = None
+        prediction_time = None
+        predictions = pd.DataFrame(
+            columns=["CustomerID", "CustomerRank_true", "CustomerRank_predicted", "Cluster", "Spend_predicted", "Spend_true"]
+        )
+        result_row = make_model_result(
+            "Linear Regression",
+            "Regression",
+            status="no_test_samples",
+            training_time=training_time,
+            evaluation_set_id=evaluation_set_id,
+        )
+    else:
+        started = time.perf_counter()
+        spend_predictions = model.predict(test[list(FEATURE_COLUMNS)])
+        prediction_time = time.perf_counter() - started
+        rank_predictions = model.predict_rank(test[list(FEATURE_COLUMNS)], thresholds=thresholds)
+
+        metrics = evaluate_regression(test["FutureSpend"], spend_predictions, thresholds)
+        result_row = make_model_result(
+            "Linear Regression",
+            "Regression",
+            metrics,
+            training_time=training_time,
+            prediction_time=prediction_time,
+            evaluation_set_id=evaluation_set_id,
+        )
+        predictions = pd.DataFrame(
+            {
+                "CustomerID": test["CustomerID"].to_numpy(),
+                "CustomerRank_true": test["CustomerRank"].to_numpy(),
+                "CustomerRank_predicted": rank_predictions,
+                "Cluster": 0,
+                "Spend_predicted": spend_predictions,
+                "Spend_true": test["FutureSpend"].to_numpy(),
+            }
+        )
+
+    train_ids = train["CustomerID"].tolist()
+    test_ids = test["CustomerID"].tolist()
+    if set(train_ids) & set(test_ids):
+        raise RuntimeError("Customer ID leakage detected between train and test.")
+
+    metadata = {
+        "model": "Linear Regression",
+        "model_type": "Regression",
+        "random_state": random_state,
+        "test_size": test_size,
+        "n_train_customers": len(train),
+        "n_test_customers": len(test),
+        "evaluation_set_id": evaluation_set_id,
+        "rank_thresholds": thresholds.as_dict(),
+        "coefficients": model.get_coefficients().to_dict(orient="records"),
+        "train_rank_distribution": _rank_distribution(train["CustomerRank"]),
+        "test_rank_distribution": _rank_distribution(test["CustomerRank"]),
+        "prediction_window_start": _attr_iso(dataset, "prediction_start"),
+        "observation_end": _attr_iso(dataset, "observation_end"),
+        "temporal_scope": "single cutoff; not a multi-period backtest",
+    }
+    return {
+        "model": model,
+        "metrics": metrics,
+        "result_row": result_row,
+        "predictions": predictions,
+        "metadata": metadata,
+        "train_customer_ids": train_ids,
+        "test_customer_ids": test_ids,
+        "thresholds": thresholds,
+    }
+
+
 def save_experiment(result: dict, output_dir: Path | str):
     """Write a complete run to a new directory, refusing every overwrite."""
     destination = Path(output_dir)
@@ -158,6 +258,7 @@ def save_experiment(result: dict, output_dir: Path | str):
 def run_training(
     transactions: pd.DataFrame,
     *,
+    model_name: str = "kmeans",
     prediction_days: int = 90,
     n_clusters: int = 4,
     test_size: float = 0.2,
@@ -166,9 +267,15 @@ def run_training(
     """In-memory training path, useful for tests and notebooks."""
     clean = clean_transactions(transactions)
     dataset = build_customer_dataset(clean, prediction_days=prediction_days, random_state=random_state)
-    result = train_kmeans_rank_model(
-        dataset, n_clusters=n_clusters, test_size=test_size, random_state=random_state
-    )
+    norm_name = str(model_name).strip().lower()
+    if norm_name in ("linear_regression", "linear regression", "lr", "regression"):
+        result = train_linear_regression_rank_model(
+            dataset, test_size=test_size, random_state=random_state
+        )
+    else:
+        result = train_kmeans_rank_model(
+            dataset, n_clusters=n_clusters, test_size=test_size, random_state=random_state
+        )
     result["dataset"] = dataset
     return result
 
@@ -205,6 +312,7 @@ def main(argv=None):
         help="New run folder that does not exist yet; existing artifacts are protected.",
     )
     parser.add_argument("--data", default=None, help="Path to Online Retail.xlsx (default: data/raw/Online Retail.xlsx).")
+    parser.add_argument("--model", default="kmeans", choices=["kmeans", "linear_regression", "lr"], help="Model name to train")
     parser.add_argument("--clusters", type=int, default=4)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=42)
@@ -224,6 +332,7 @@ def main(argv=None):
     transactions = load_data(args.data)
     result = run_training(
         transactions,
+        model_name=args.model,
         n_clusters=args.clusters,
         test_size=args.test_size,
         random_state=args.random_state,
