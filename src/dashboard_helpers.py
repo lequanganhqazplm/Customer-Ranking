@@ -1,5 +1,6 @@
 """Validation and presentation helpers for the report-driven dashboard."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -63,7 +64,7 @@ MODEL_RESULT_COLUMNS = (
 MODEL_CATALOG = (
     {"name": "K-Means", "type": "Clustering", "implemented": True},
     {"name": "Logistic Regression", "type": "Classification", "implemented": False},
-    {"name": "Decision Tree", "type": "Classification", "implemented": False},
+    {"name": "Decision Tree", "type": "Classification", "implemented": True},
     {"name": "Random Forest", "type": "Classification", "implemented": False},
     {"name": "Gradient Boosting", "type": "Classification", "implemented": False},
     {"name": "KNN", "type": "Classification", "implemented": False},
@@ -359,6 +360,63 @@ def comparable_model_results(data):
     if excluded:
         warning = "Không đưa vào so sánh các mô hình thiếu mã tập test hoặc dùng tập test khác: " + ", ".join(dict.fromkeys(excluded)) + "."
     return same_set, list(dict.fromkeys(excluded)), warning
+
+
+def validate_dt_predictions(data):
+    """Validate Decision Tree holdout predictions."""
+    required = {"CustomerID", "CustomerRank_true", "CustomerRank_predicted"}
+    if data is None:
+        return None, "Run Decision Tree chưa lưu dự đoán test."
+    if data.empty:
+        return None, "Tệp dự đoán Decision Tree không có dòng dữ liệu."
+    missing = sorted(required - set(data.columns))
+    if missing:
+        return None, f"Tệp dự đoán Decision Tree thiếu cột: {', '.join(missing)}."
+    result = data.copy()
+    if result["CustomerID"].isna().any():
+        return None, "Tệp dự đoán Decision Tree có CustomerID bị thiếu."
+    result["CustomerID"] = result["CustomerID"].map(_normalize_customer_id)
+    if result["CustomerID"].duplicated().any():
+        return None, "Tệp dự đoán Decision Tree có CustomerID trùng lặp."
+    for column in ("CustomerRank_true", "CustomerRank_predicted"):
+        result[column] = result[column].astype("string").str.strip()
+        invalid = result[column].isna() | ~result[column].isin(RANK_ORDER)
+        if invalid.any():
+            return None, f"Tệp dự đoán Decision Tree có nhãn không hợp lệ trong {column}."
+    return result, None
+
+
+def load_dt_run(runs_dir):
+    """Load and validate the latest Decision Tree run artifacts."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        return None, None, None, None
+    candidates = sorted(
+        runs_dir.glob("*/ranking_metrics.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for metrics_path in candidates:
+        metadata_path = metrics_path.parent / "run_metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            with metadata_path.open("r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, None, None, "Không đọc được thông tin kết quả Decision Tree."
+        if not isinstance(metadata, dict) or metadata.get("model") != "Decision Tree":
+            continue
+        predictions_path = metrics_path.parent / "test_predictions.csv"
+        if not predictions_path.is_file():
+            return metadata, None, metrics_path.parent, "Chưa có bảng dự đoán Decision Tree để hiển thị."
+        try:
+            raw = pd.read_csv(predictions_path)
+        except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+            return metadata, None, metrics_path.parent, "Không đọc được bảng dự đoán Decision Tree."
+        predictions, error = validate_dt_predictions(raw)
+        return metadata, predictions, metrics_path.parent, error
+    return None, None, None, None
 
 
 def _normalize_customer_id(value):
