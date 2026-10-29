@@ -155,7 +155,8 @@ def test_model_catalog_contains_exactly_ten_distinct_algorithms():
     assert len(names) == 10
     assert len(set(names)) == 10
     assert names[0] == "K-Means"
-    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 1
+    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 2
+    assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Linear Regression")["implemented"] is True
 
 
 def test_model_comparison_rejects_legacy_or_incomplete_schema_and_warns_on_test_mismatch():
