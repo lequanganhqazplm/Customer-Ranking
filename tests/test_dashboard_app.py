@@ -25,12 +25,19 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
     ]
     assert model_selector.options == displayed_names
 
+    train_selector = next(widget for widget in app.selectbox if widget.label == "Chọn mô hình huấn luyện")
+    assert "Cây quyết định (Decision Tree)" in train_selector.options
+
     for model_info, display_name in zip(MODEL_CATALOG, displayed_names):
         app.selectbox[0].set_value(display_name).run()
         assert not app.exception
         if not model_info["implemented"]:
             assert any("Chưa triển khai" in item.value for item in app.info)
             assert len(app.metric) == 0
+
+    app.selectbox[0].set_value("Cây quyết định (Decision Tree)").run()
+    assert not app.exception
+    assert any("Cây quyết định (Decision Tree)" in element.value for element in app.subheader)
 
     app.selectbox[0].set_value("K-Means (phân cụm)").run()
     assert not app.exception
@@ -48,19 +55,27 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
         navigation = next(widget for widget in app.radio if widget.label == "Điều hướng")
         navigation.set_value(page_name).run()
         assert not app.exception
-        if page_name == "So sánh mô hình" and (
-            Path(__file__).resolve().parents[1] / "outputs" / "runs" / "rank-kmeans-rfm-map-20261028" / "ranking_metrics.csv"
-        ).is_file():
+        if page_name == "So sánh mô hình":
             status_table = next(
                 table.value for table in app.dataframe
                 if {"Mô hình", "Trạng thái"}.issubset(set(table.value.columns))
             )
-            assert len(status_table) == 10
-            assert (status_table["Trạng thái"] == "Chưa triển khai").sum() == 9
-            assert any(
+            expected_unimplemented = sum(not model["implemented"] for model in MODEL_CATALOG)
+            assert len(status_table) == len(MODEL_CATALOG)
+            assert (status_table["Trạng thái"] == "Chưa triển khai").sum() == expected_unimplemented
+
+            single_model_message = any(
                 "Hiện mới có một mô hình được đánh giá. Chưa đủ dữ liệu để kết luận mô hình nào tốt nhất." in item.value
                 for item in app.info
             )
+            comparison_tables = [
+                table.value for table in app.dataframe
+                if "Mô hình" in table.value.columns and "Trạng thái" not in table.value.columns
+            ]
+            if comparison_tables and len(comparison_tables[0]) == 1:
+                assert single_model_message
+            else:
+                assert not single_model_message
             visible_captions = [item.value for item in app.caption]
             assert all("Evaluation_Set_ID" not in caption for caption in visible_captions)
 
