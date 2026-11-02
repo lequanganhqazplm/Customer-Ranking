@@ -4,8 +4,10 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
+from sklearn.metrics import r2_score
 
 from src.dashboard_helpers import (
     FEATURE_REPORT_COLUMNS,
@@ -16,6 +18,7 @@ from src.dashboard_helpers import (
     available_model_results,
     comparable_model_results,
     load_dt_run,
+    load_rf_run,
     read_csv_report,
     validate_feature_report,
     validate_model_results,
@@ -165,6 +168,7 @@ if customers is not None:
 rank_results, rank_result_warnings = load_ranking_results()
 rank_metadata, rank_predictions, rank_run_path, rank_run_error = load_latest_rank_run()
 dt_metadata, dt_predictions, dt_run_path, dt_run_error = load_dt_run(RUNS_DIR)
+rf_metadata, rf_predictions, rf_run_path, rf_run_error = load_rf_run(RUNS_DIR)
 if rank_results is not None and not rank_results.empty and (
     rank_metadata is None or rank_predictions is None or rank_run_error
 ):
@@ -179,6 +183,13 @@ if rank_results is not None and not rank_results.empty and (
     if stale_dt.any():
         rank_results = rank_results.loc[~stale_dt].reset_index(drop=True)
         rank_result_warnings.append("Decision Tree chưa có dự đoán hợp lệ nên đã được loại khỏi so sánh.")
+if rank_results is not None and not rank_results.empty and (
+    rf_metadata is None or rf_predictions is None or rf_run_error
+):
+    stale_rf = rank_results["Model"].astype(str).eq("Random Forest")
+    if stale_rf.any():
+        rank_results = rank_results.loc[~stale_rf].reset_index(drop=True)
+        rank_result_warnings.append("Random Forest chưa có dự đoán hợp lệ nên đã được loại khỏi so sánh.")
 completed_results = available_model_results(rank_results)
 comparison_results, excluded_models, comparison_warning = comparable_model_results(rank_results)
 
@@ -240,6 +251,64 @@ def render_metric_cards(row):
         column.metric(short_label, f"{float(row[key]):.3f}", help=label)
 
 
+def render_sample_counts(train_count, test_count):
+    """Render standardized train and test customer count metric cards."""
+    first, second = st.columns(2)
+    first.metric(
+        "Khách hàng dùng để huấn luyện",
+        f"{train_count:,}" if isinstance(train_count, int) else "Chưa có dữ liệu",
+    )
+    second.metric(
+        "Khách hàng trong tập kiểm tra",
+        f"{test_count:,}" if isinstance(test_count, int) else "Chưa có dữ liệu",
+    )
+
+
+def render_rank_distribution_and_predictions(
+    predictions: pd.DataFrame,
+    *,
+    extra_view_cols: dict[str, str] | None = None,
+):
+    """Render standardized actual vs predicted rank chart and customer details expander."""
+    counts = []
+    for rank in RANK_ORDER:
+        counts.append(
+            {
+                "Hạng khách hàng": RANK_DISPLAY_NAMES[rank],
+                "Thực tế": int(predictions["CustomerRank_true"].eq(rank).sum()),
+                "Dự đoán": int(predictions["CustomerRank_predicted"].eq(rank).sum()),
+            }
+        )
+    distribution = pd.DataFrame(counts).set_index("Hạng khách hàng")
+    st.subheader("Phân bố hạng thực tế và dự đoán trên tập kiểm tra")
+    st.bar_chart(distribution, color=["#93a7b8", "#137c8b"])
+    with st.expander("Xem bảng phân bố và dự đoán từng khách hàng"):
+        st.dataframe(distribution.reset_index(), width="stretch", hide_index=True)
+        base_cols = ["CustomerID", "CustomerRank_true", "CustomerRank_predicted"]
+        view_cols = base_cols + [col for col in (extra_view_cols or {}) if col in predictions.columns]
+        rename_map = {
+            "CustomerID": "Mã khách hàng",
+            "CustomerRank_true": "Hạng thực tế",
+            "CustomerRank_predicted": "Hạng dự đoán",
+            **(extra_view_cols or {}),
+        }
+        prediction_view = predictions[view_cols].rename(columns=rename_map).copy()
+        prediction_view["Hạng thực tế"] = prediction_view["Hạng thực tế"].map(rank_name)
+        prediction_view["Hạng dự đoán"] = prediction_view["Hạng dự đoán"].map(rank_name)
+        if extra_view_cols:
+            for col, new_name in extra_view_cols.items():
+                if new_name in prediction_view.columns and "Mã cụm" in new_name:
+                    prediction_view[new_name] = prediction_view[new_name].map(
+                        lambda v: f"Cụm {int(v)}" if pd.notna(v) else "Chưa có kết quả"
+                    )
+                elif new_name in prediction_view.columns and "£" in new_name:
+                    prediction_view[new_name] = prediction_view[new_name].map(
+                        lambda v: f"£{float(v):,.2f}" if pd.notna(v) else ""
+                    )
+        st.dataframe(prediction_view, width="stretch", hide_index=True)
+    st.caption("Kết quả phản ánh một lần chia tập kiểm tra; chưa phải đánh giá qua nhiều giai đoạn.")
+
+
 def render_kmeans_model():
     st.subheader("K-Means (thuật toán phân cụm)")
     st.write(
@@ -261,6 +330,10 @@ def render_kmeans_model():
         st.info("Chưa có thông tin cụm từ lần đánh giá hiện hành.")
         return
 
+    train_count = rank_metadata.get("n_train_customers")
+    test_count = rank_metadata.get("n_test_customers") or (len(rank_predictions) if rank_predictions is not None else None)
+    render_sample_counts(train_count, test_count)
+
     diagnostics = rank_metadata.get("train_only_clustering_diagnostics", {})
     silhouette = diagnostics.get("silhouette_score")
     inertia = diagnostics.get("inertia")
@@ -276,7 +349,6 @@ def render_kmeans_model():
         f"{float(inertia):,.2f}" if inertia is not None else "Chưa có dữ liệu",
     )
     st.caption("Hai chỉ số cụm được tính trên tập huấn luyện; chúng không đo độ chính xác của hạng khách hàng.")
-    st.caption("Kết quả dựa trên một mốc thời gian, chưa được kiểm tra qua nhiều giai đoạn.")
 
     mapping = rank_metadata.get("cluster_to_rank", {})
     if mapping and not profiles.empty:
@@ -300,6 +372,10 @@ def render_kmeans_model():
             "trong tập huấn luyện; mua gần đây hơn được xem là tích cực hơn."
         )
 
+        st.subheader("Điểm đặc trưng theo từng cụm (Business Value Score)")
+        score_chart = profile_view.set_index("Hạng được gán")["Điểm đặc trưng"].sort_values()
+        st.bar_chart(score_chart)
+
     rank_distribution = []
     for split_key, split_label in (("train", "Huấn luyện"), ("test", "Kiểm tra")):
         for rank in RANK_ORDER:
@@ -317,10 +393,11 @@ def render_kmeans_model():
             st.dataframe(pd.DataFrame(rank_distribution), width="stretch", hide_index=True)
 
     if rank_predictions is not None and not rank_predictions.empty:
-        cluster_counts = rank_predictions.groupby("ClusterID", sort=True).size().rename("Số khách hàng").reset_index()
-        cluster_counts = cluster_counts.rename(columns={"ClusterID": "Mã cụm"})
-        st.subheader("Số khách hàng theo cụm trong tập kiểm tra")
-        st.dataframe(cluster_counts, width="stretch", hide_index=True)
+        render_rank_distribution_and_predictions(
+            rank_predictions,
+            extra_view_cols={"ClusterID": "Mã cụm"},
+        )
+
         test_features = (
             customers_for_view.dropna(subset=["ClusterID"]).copy()
             if customers_for_view is not None
@@ -340,71 +417,73 @@ def render_kmeans_model():
             )
 
 
-def render_decision_tree_model():
-    st.subheader("Cây quyết định (Decision Tree)")
-    st.write(
-        "Decision Tree học các quy tắc phân nhánh từ đặc trưng mua hàng để dự đoán hạng khách hàng. "
-        "Các chỉ số dưới đây được tính trên tập kiểm tra đã lưu cùng lần chạy."
-    )
+def render_tree_classification_model(
+    model_title: str,
+    model_description: str,
+    model_name: str,
+    metadata: dict | None,
+    predictions: pd.DataFrame | None,
+    run_error: str | None,
+):
+    """Render standardized classification model UI for decision tree and ensemble models."""
+    st.subheader(model_title)
+    st.write(model_description)
 
-    result = completed_results.get("Decision Tree")
+    result = completed_results.get(model_name)
     if result is not None:
         st.success("Đã có kết quả phân hạng trên tập kiểm tra.")
         render_metric_cards(result)
-    elif dt_run_error:
-        st.warning("Chưa thể hiển thị kết quả Decision Tree vì dữ liệu lần chạy không đầy đủ hoặc không hợp lệ.")
+    elif run_error:
+        st.warning(f"Chưa thể hiển thị kết quả {model_name} vì dữ liệu lần chạy không đầy đủ hoặc không hợp lệ.")
     else:
-        st.info("Chưa có kết quả đánh giá Decision Tree.")
+        st.info(f"Chưa có kết quả đánh giá {model_name}.")
 
-    if dt_metadata is None or dt_predictions is None:
+    if metadata is None or predictions is None:
         return
 
-    first, second = st.columns(2)
-    train_count = dt_metadata.get("n_train_customers")
-    first.metric(
-        "Khách hàng dùng để huấn luyện",
-        f"{train_count:,}" if isinstance(train_count, int) else "Chưa có dữ liệu",
-    )
-    second.metric("Khách hàng trong tập kiểm tra", f"{len(dt_predictions):,}")
+    train_count = metadata.get("n_train_customers")
+    test_count = len(predictions)
+    render_sample_counts(train_count, test_count)
 
-    parameters = dt_metadata.get("model_parameters")
+    parameters = metadata.get("model_parameters")
     if isinstance(parameters, dict) and parameters:
         st.caption("Tham số mô hình: " + ", ".join(f"{key} = {value}" for key, value in parameters.items()))
 
-    importances = pd.DataFrame(dt_metadata.get("feature_importances", []))
+    importances = pd.DataFrame(metadata.get("feature_importances", []))
     if not importances.empty and {"Feature", "Importance"}.issubset(importances.columns):
         importance_view = importances.set_index("Feature")["Importance"].sort_values()
         st.subheader("Mức độ đóng góp của các đặc trưng")
         st.bar_chart(importance_view)
 
-    counts = []
-    for rank in RANK_ORDER:
-        counts.append(
-            {
-                "Hạng khách hàng": RANK_DISPLAY_NAMES[rank],
-                "Thực tế": int(dt_predictions["CustomerRank_true"].eq(rank).sum()),
-                "Dự đoán": int(dt_predictions["CustomerRank_predicted"].eq(rank).sum()),
-            }
-        )
-    distribution = pd.DataFrame(counts).set_index("Hạng khách hàng")
-    st.subheader("Phân bố hạng thực tế và dự đoán trên tập kiểm tra")
-    st.bar_chart(distribution, color=["#93a7b8", "#137c8b"])
-    with st.expander("Xem bảng phân bố và dự đoán từng khách hàng"):
-        st.dataframe(distribution.reset_index(), width="stretch", hide_index=True)
-        prediction_view = dt_predictions[
-            ["CustomerID", "CustomerRank_true", "CustomerRank_predicted"]
-        ].rename(
-            columns={
-                "CustomerID": "Mã khách hàng",
-                "CustomerRank_true": "Hạng thực tế",
-                "CustomerRank_predicted": "Hạng dự đoán",
-            }
-        )
-        prediction_view["Hạng thực tế"] = prediction_view["Hạng thực tế"].map(rank_name)
-        prediction_view["Hạng dự đoán"] = prediction_view["Hạng dự đoán"].map(rank_name)
-        st.dataframe(prediction_view, width="stretch", hide_index=True)
-    st.caption("Kết quả phản ánh một lần chia tập kiểm tra; chưa phải đánh giá qua nhiều giai đoạn.")
+    render_rank_distribution_and_predictions(predictions)
 
+
+def render_decision_tree_model():
+    render_tree_classification_model(
+        model_title="Cây quyết định (Decision Tree)",
+        model_description=(
+            "Decision Tree học các quy tắc phân nhánh từ đặc trưng mua hàng để dự đoán hạng khách hàng. "
+            "Các chỉ số dưới đây được tính trên tập kiểm tra đã lưu cùng lần chạy."
+        ),
+        model_name="Decision Tree",
+        metadata=dt_metadata,
+        predictions=dt_predictions,
+        run_error=dt_run_error,
+    )
+
+
+def render_random_forest_model():
+    render_tree_classification_model(
+        model_title="Rừng ngẫu nhiên (Random Forest)",
+        model_description=(
+            "Random Forest kết hợp nhiều cây quyết định trên các mẫu con của dữ liệu và đặc trưng để dự đoán hạng khách hàng. "
+            "Các chỉ số dưới đây được tính trên tập kiểm tra đã lưu cùng lần chạy."
+        ),
+        model_name="Random Forest",
+        metadata=rf_metadata,
+        predictions=rf_predictions,
+        run_error=rf_run_error,
+    )
 
 
 def load_latest_linear_regression_run():
@@ -436,48 +515,110 @@ def render_linear_regression_model():
         "dựa trên các đặc trưng hành vi lịch sử. Sau đó, mức chi tiêu dự đoán được chặn dưới tại 0 "
         "và quy đổi sang 4 hạng (Bronze, Silver, Gold, Diamond) theo ngưỡng P50 và P85 học từ tập huấn luyện."
     )
+
+    lr_meta, lr_preds = load_latest_linear_regression_run()
     result = completed_results.get("Linear Regression")
-    if result is not None:
-        st.success("Đã có kết quả phân hạng trên tập kiểm tra.")
-        render_metric_cards(result)
+
+    spend_columns = {"Spend_true", "Spend_predicted"}
+    if lr_preds is not None and not lr_preds.empty and spend_columns.issubset(lr_preds.columns):
+        spend_true = pd.to_numeric(lr_preds["Spend_true"], errors="coerce").to_numpy(dtype=float)
+        spend_pred = pd.to_numeric(lr_preds["Spend_predicted"], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(spend_true) & np.isfinite(spend_pred)
+        if valid.all():
+            st.success("Đã có kết quả dự đoán chi tiêu và quy đổi hạng trên tập kiểm tra.")
+            y_t, y_p = spend_true, spend_pred
+            mae = float(np.mean(np.abs(y_t - y_p)))
+            rmse = float(np.sqrt(np.mean((y_t - y_p) ** 2)))
+            medae = float(np.median(np.abs(y_t - y_p)))
+            r2 = float(r2_score(y_t, y_p))
+
+            accuracy_val = "Chưa có"
+            rank_columns = {"CustomerRank_true", "CustomerRank_predicted"}
+            if rank_columns.issubset(lr_preds.columns):
+                rank_true = lr_preds["CustomerRank_true"].astype("string").str.strip()
+                rank_predicted = lr_preds["CustomerRank_predicted"].astype("string").str.strip()
+                valid_ranks = (
+                    rank_true.notna()
+                    & rank_predicted.notna()
+                    & rank_true.isin(RANK_ORDER)
+                    & rank_predicted.isin(RANK_ORDER)
+                )
+                if valid_ranks.all():
+                    accuracy_val = f"{float(rank_true.eq(rank_predicted).mean()):.3f}"
+
+            cols = st.columns(5)
+            cols[0].metric(
+                "Sai số tuyệt đối TB (MAE)",
+                f"£{mae:,.2f}",
+                help="Mean Absolute Error: Trung bình sai lệch tuyệt đối giữa chi tiêu thực tế và chi tiêu dự đoán.",
+            )
+            cols[1].metric(
+                "Sai số toàn phương (RMSE)",
+                f"£{rmse:,.2f}",
+                help="Root Mean Squared Error: Đo lường độ lớn sai số bình phương trung bình.",
+            )
+            cols[2].metric(
+                "Sai số trung vị (Median AE)",
+                f"£{medae:,.2f}",
+                help="Median Absolute Error: Trung vị sai số tuyệt đối, ít chịu ảnh hưởng bởi khách chi tiêu đột biến.",
+            )
+            cols[3].metric(
+                "Hệ số xác định (R²)",
+                f"{r2:.3f}",
+                help="R-squared: Tỷ lệ phương sai chi tiêu thực tế được giải thích bởi mô hình.",
+            )
+            cols[4].metric(
+                "Độ chính xác quy đổi hạng",
+                accuracy_val,
+                help="Độ chính xác sau khi chuyển đổi chi tiêu dự đoán sang 4 hạng khách hàng qua ngưỡng P50 và P85.",
+            )
+        else:
+            st.warning("Không thể tính chỉ số hồi quy vì dữ liệu chi tiêu thực tế hoặc dự đoán không hợp lệ.")
+    elif lr_preds is not None and not lr_preds.empty:
+        st.warning("Run Linear Regression thiếu chi tiêu thực tế hoặc dự đoán; không thể tính chỉ số hồi quy.")
+    elif result is not None:
+        st.warning("Run Linear Regression chưa lưu đủ dữ liệu chi tiêu để tính các chỉ số hồi quy.")
     else:
         st.info("Chưa có kết quả đánh giá Hồi quy tuyến tính.")
 
-    lr_meta, lr_preds = load_latest_linear_regression_run()
     if lr_meta is None:
         return
 
+    train_count = lr_meta.get("n_train_customers")
+    test_count = lr_meta.get("n_test_customers") or (len(lr_preds) if lr_preds is not None else None)
+    render_sample_counts(train_count, test_count)
+
     thresholds = lr_meta.get("rank_thresholds", {})
-    t1, t2 = st.columns(2)
-    t1.metric("Ngưỡng P50 (Silver -> Gold)", f"£{float(thresholds.get('q50', 0)):,.2f}")
-    t2.metric("Ngưỡng P85 (Gold -> Diamond)", f"£{float(thresholds.get('q85', 0)):,.2f}")
+    if thresholds:
+        q50 = float(thresholds.get("q50", 0))
+        q85 = float(thresholds.get("q85", 0))
+        st.caption(
+            f"Tham số mô hình: fit_intercept = True | Ngưỡng phân hạng chi tiêu: "
+            f"P50 (Silver -> Gold) = £{q50:,.2f}, P85 (Gold -> Diamond) = £{q85:,.2f}"
+        )
 
     coefs = pd.DataFrame(lr_meta.get("coefficients", []))
-    if not coefs.empty:
+    if not coefs.empty and {"Feature", "Coefficient"}.issubset(coefs.columns):
         st.subheader("Trọng số ảnh hưởng của các đặc trưng (Feature Coefficients)")
         st.write(
             "Hệ số dương biểu thị đặc trưng thúc đẩy chi tiêu tương lai; "
             "hệ số âm biểu thị đặc trưng làm giảm chi tiêu tương lai."
         )
-        coef_display = coefs.copy()
-        coef_display["Tên đặc trưng"] = coef_display["Feature"].map(lambda f: FEATURE_NAMES.get(f, f))
-        coef_display["Hệ số (Beta)"] = coef_display["Coefficient"].map(lambda v: f"{v:,.2f}")
-        st.dataframe(coef_display[["Tên đặc trưng", "Feature", "Hệ số (Beta)"]], width="stretch", hide_index=True)
-        st.bar_chart(coefs.set_index("Feature")["Coefficient"])
+        coef_sorted = coefs.sort_values("Coefficient", ascending=True)
+        st.bar_chart(coef_sorted.set_index("Feature")["Coefficient"])
+        with st.expander("Xem bảng trọng số hệ số hồi quy"):
+            coef_display = coefs.copy()
+            coef_display["Tên đặc trưng"] = coef_display["Feature"].map(lambda f: FEATURE_NAMES.get(f, f))
+            coef_display["Hệ số (Beta)"] = coef_display["Coefficient"].map(lambda v: f"{v:,.2f}")
+            st.dataframe(coef_display[["Tên đặc trưng", "Feature", "Hệ số (Beta)"]], width="stretch", hide_index=True)
 
-    if lr_preds is not None and not lr_preds.empty:
-        st.subheader("Phân bố hạng thực tế vs dự đoán trên tập kiểm tra")
-        actual = lr_preds["CustomerRank_true"].value_counts().reindex(RANK_ORDER, fill_value=0)
-        predicted = lr_preds["CustomerRank_predicted"].value_counts().reindex(RANK_ORDER, fill_value=0)
-        dist = pd.DataFrame(
-            {
-                "Hạng khách hàng": [RANK_DISPLAY_NAMES[r] for r in RANK_ORDER],
-                "Thực tế": actual.values,
-                "Dự đoán": predicted.values,
-            }
-        )
-        st.dataframe(dist, width="stretch", hide_index=True)
-        st.bar_chart(dist.set_index("Hạng khách hàng"), color=["#93a7b8", "#137c8b"])
+    if lr_preds is not None and not lr_preds.empty and {"CustomerRank_true", "CustomerRank_predicted"}.issubset(lr_preds.columns):
+        extra_cols = {}
+        if "Spend_true" in lr_preds.columns:
+            extra_cols["Spend_true"] = "Chi tiêu thực tế (£)"
+        if "Spend_predicted" in lr_preds.columns:
+            extra_cols["Spend_predicted"] = "Chi tiêu dự đoán (£)"
+        render_rank_distribution_and_predictions(lr_preds, extra_view_cols=extra_cols)
 
 
 with st.sidebar:
@@ -491,6 +632,7 @@ with st.sidebar:
             "Hồi quy tuyến tính (Linear Regression)",
             "K-Means (phân cụm)",
             "Cây quyết định (Decision Tree)",
+            "Rừng ngẫu nhiên (Random Forest)",
         ]
         selected_train_model = st.selectbox("Chọn mô hình huấn luyện", trainable_models, key="ui_train_model")
 
@@ -515,6 +657,8 @@ with st.sidebar:
                             model_key = "linear_regression"
                         elif "Decision Tree" in selected_train_model:
                             model_key = "decision_tree"
+                        elif "Random Forest" in selected_train_model:
+                            model_key = "random_forest"
                         else:
                             model_key = "kmeans"
                         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -532,6 +676,18 @@ with st.sidebar:
                                 random_state=42,
                             )
                             save_decision_tree_experiment(train_result, out_dir)
+                        elif model_key == "random_forest":
+                            from src.train_random_forest import (
+                                run_training as run_random_forest_training,
+                                save_experiment as save_random_forest_experiment,
+                            )
+
+                            train_result = run_random_forest_training(
+                                transactions,
+                                test_size=float(train_test_size),
+                                random_state=42,
+                            )
+                            save_random_forest_experiment(train_result, out_dir)
                         else:
                             train_result = run_training(
                                 transactions,
@@ -610,6 +766,8 @@ elif page == "Mô hình":
         render_kmeans_model()
     elif selected == "Decision Tree":
         render_decision_tree_model()
+    elif selected == "Random Forest":
+        render_random_forest_model()
     elif selected == "Linear Regression":
         render_linear_regression_model()
     elif not model_info["implemented"]:

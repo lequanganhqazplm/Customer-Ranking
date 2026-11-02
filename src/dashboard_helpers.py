@@ -65,7 +65,7 @@ MODEL_CATALOG = (
     {"name": "K-Means", "type": "Clustering", "implemented": True},
     {"name": "Logistic Regression", "type": "Classification", "implemented": False},
     {"name": "Decision Tree", "type": "Classification", "implemented": True},
-    {"name": "Random Forest", "type": "Classification", "implemented": False},
+    {"name": "Random Forest", "type": "Classification", "implemented": True},
     {"name": "Gradient Boosting", "type": "Classification", "implemented": False},
     {"name": "KNN", "type": "Classification", "implemented": False},
     {"name": "SVC", "type": "Classification", "implemented": False},
@@ -414,6 +414,38 @@ def load_dt_run(runs_dir):
             raw = pd.read_csv(predictions_path)
         except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
             return metadata, None, metrics_path.parent, "Không đọc được bảng dự đoán Decision Tree."
+        predictions, error = validate_dt_predictions(raw)
+        return metadata, predictions, metrics_path.parent, error
+    return None, None, None, None
+
+def load_rf_run(runs_dir):
+    """Load and validate the latest Random Forest run artifacts."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        return None, None, None, None
+    candidates = sorted(
+        runs_dir.glob("*/ranking_metrics.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for metrics_path in candidates:
+        metadata_path = metrics_path.parent / "run_metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            with metadata_path.open("r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, None, None, "Không đọc được thông tin kết quả Random Forest."
+        if not isinstance(metadata, dict) or metadata.get("model") != "Random Forest":
+            continue
+        predictions_path = metrics_path.parent / "test_predictions.csv"
+        if not predictions_path.is_file():
+            return metadata, None, metrics_path.parent, "Chưa có bảng dự đoán Random Forest để hiển thị."
+        try:
+            raw = pd.read_csv(predictions_path)
+        except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+            return metadata, None, metrics_path.parent, "Không đọc được bảng dự đoán Random Forest."
         predictions, error = validate_dt_predictions(raw)
         return metadata, predictions, metrics_path.parent, error
     return None, None, None, None

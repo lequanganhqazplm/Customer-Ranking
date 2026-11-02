@@ -17,6 +17,7 @@ from src.dashboard_helpers import (
     build_cluster_labels,
     comparable_model_results,
     load_dt_run,
+    load_rf_run,
     read_csv_report,
     reconcile_cluster_summary,
     validate_test_predictions,
@@ -157,9 +158,10 @@ def test_model_catalog_contains_exactly_ten_distinct_algorithms():
     assert len(names) == 10
     assert len(set(names)) == 10
     assert names[0] == "K-Means"
-    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 3
+    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 4
     assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Linear Regression")["implemented"] is True
     assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Decision Tree")["implemented"] is True
+    assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Random Forest")["implemented"] is True
 
 
 def test_validate_dt_predictions_checks_rank_labels_and_customer_ids():
@@ -207,6 +209,26 @@ def test_load_dt_run_reads_and_validates_latest_artifacts(tmp_path):
     assert metadata["model"] == "Decision Tree"
     assert predictions["CustomerID"].tolist() == ["14646", "14911"]
     assert loaded_path == run_path
+
+def test_load_rf_run_reads_and_validates_latest_artifacts(tmp_path):
+    run_path = tmp_path / "random-forest-run"
+    run_path.mkdir()
+    (run_path / "ranking_metrics.csv").write_text("Model\nRandom Forest\n", encoding="utf-8")
+    (run_path / "run_metadata.json").write_text(
+        '{"model": "Random Forest", "n_test_customers": 2}', encoding="utf-8"
+    )
+    (run_path / "test_predictions.csv").write_text(
+        "CustomerID,CustomerRank_true,CustomerRank_predicted\n14646,Diamond,Gold\n14911,Bronze,Bronze\n",
+        encoding="utf-8",
+    )
+
+    metadata, predictions, loaded_path, error = load_rf_run(tmp_path)
+
+    assert error is None
+    assert metadata["model"] == "Random Forest"
+    assert predictions["CustomerID"].tolist() == ["14646", "14911"]
+    assert loaded_path == run_path
+
 
 
 def test_model_comparison_rejects_legacy_or_incomplete_schema_and_warns_on_test_mismatch():

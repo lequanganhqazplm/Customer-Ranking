@@ -266,10 +266,27 @@ def run_training(
 ):
     """In-memory training path, useful for tests and notebooks."""
     clean = clean_transactions(transactions)
-    dataset = build_customer_dataset(clean, prediction_days=prediction_days, random_state=random_state)
+    dataset = build_customer_dataset(
+        clean,
+        prediction_days=prediction_days,
+        test_size=test_size,
+        random_state=random_state,
+    )
     norm_name = str(model_name).strip().lower()
     if norm_name in ("linear_regression", "linear regression", "lr", "regression"):
         result = train_linear_regression_rank_model(
+            dataset, test_size=test_size, random_state=random_state
+        )
+    elif norm_name in ("random_forest", "random forest", "rf", "randomforest"):
+        from src.train_random_forest import train_random_forest_rank_model
+
+        result = train_random_forest_rank_model(
+            dataset, test_size=test_size, random_state=random_state
+        )
+    elif norm_name in ("decision_tree", "decision tree", "dt"):
+        from src.train_decision_tree import train_decision_tree_rank_model
+
+        result = train_decision_tree_rank_model(
             dataset, test_size=test_size, random_state=random_state
         )
     else:
@@ -312,7 +329,7 @@ def main(argv=None):
         help="New run folder that does not exist yet; existing artifacts are protected.",
     )
     parser.add_argument("--data", default=None, help="Path to Online Retail.xlsx (default: data/raw/Online Retail.xlsx).")
-    parser.add_argument("--model", default="kmeans", choices=["kmeans", "linear_regression", "lr"], help="Model name to train")
+    parser.add_argument("--model", default="kmeans", choices=["kmeans", "linear_regression", "lr", "random_forest", "rf", "decision_tree", "dt"], help="Model name to train")
     parser.add_argument("--clusters", type=int, default=4)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=42)

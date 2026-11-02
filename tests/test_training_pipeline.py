@@ -84,6 +84,25 @@ def test_training_uses_train_only_thresholds_scaler_and_feature_based_cluster_ma
     assert set(result["metadata"]["test_rank_distribution"]) == {"Diamond", "Gold", "Silver", "Bronze"}
 
 
+def test_custom_test_size_is_used_for_dataset_thresholds_and_model_split():
+    result = run_training(
+        synthetic_transactions(),
+        n_clusters=4,
+        test_size=0.3,
+        random_state=42,
+    )
+    train, test, thresholds = split_customer_dataset(
+        result["dataset"],
+        test_size=0.3,
+        random_state=42,
+    )
+
+    assert result["dataset"].attrs["split_test_size"] == 0.3
+    assert len(test) == result["metadata"]["n_test_customers"]
+    assert not set(train["CustomerID"]) & set(test["CustomerID"])
+    assert result["metadata"]["rank_thresholds"] == thresholds.as_dict()
+
+
 def test_dataset_features_exclude_future_targets_and_identifiers():
     result = run_training(synthetic_transactions(), n_clusters=4)
     features = build_model_input(result["dataset"])
