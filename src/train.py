@@ -289,6 +289,12 @@ def run_training(
         result = train_decision_tree_rank_model(
             dataset, test_size=test_size, random_state=random_state
         )
+    elif norm_name in ("gradient_boosting", "gradient boosting", "gb"):
+        from src.train_gradient_boosting import train_gradient_boosting_rank_model
+
+        result = train_gradient_boosting_rank_model(
+            dataset, test_size=test_size, random_state=random_state
+        )
     else:
         result = train_kmeans_rank_model(
             dataset, n_clusters=n_clusters, test_size=test_size, random_state=random_state
@@ -329,7 +335,7 @@ def main(argv=None):
         help="New run folder that does not exist yet; existing artifacts are protected.",
     )
     parser.add_argument("--data", default=None, help="Path to Online Retail.xlsx (default: data/raw/Online Retail.xlsx).")
-    parser.add_argument("--model", default="kmeans", choices=["kmeans", "linear_regression", "lr", "random_forest", "rf", "decision_tree", "dt"], help="Model name to train")
+    parser.add_argument("--model", default="kmeans", choices=["kmeans", "linear_regression", "lr", "random_forest", "rf", "decision_tree", "dt", "gradient_boosting", "gb"], help="Model name to train")
     parser.add_argument("--clusters", type=int, default=4)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=42)

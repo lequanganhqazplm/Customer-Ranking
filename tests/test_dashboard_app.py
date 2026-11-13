@@ -27,6 +27,8 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
 
     train_selector = next(widget for widget in app.selectbox if widget.label == "Chọn mô hình huấn luyện")
     assert "Cây quyết định (Decision Tree)" in train_selector.options
+    assert "Rừng ngẫu nhiên (Random Forest)" in train_selector.options
+    assert "Tăng cường gradient (Gradient Boosting)" in train_selector.options
 
     for model_info, display_name in zip(MODEL_CATALOG, displayed_names):
         app.selectbox[0].set_value(display_name).run()
@@ -38,6 +40,10 @@ def test_navigation_and_every_model_choice_run_without_streamlit_exceptions():
     app.selectbox[0].set_value("Cây quyết định (Decision Tree)").run()
     assert not app.exception
     assert any("Cây quyết định (Decision Tree)" in element.value for element in app.subheader)
+
+    app.selectbox[0].set_value("Rừng ngẫu nhiên (Random Forest)").run()
+    assert not app.exception
+    assert any("Random Forest" in element.value for element in app.subheader)
 
     app.selectbox[0].set_value("K-Means (phân cụm)").run()
     assert not app.exception

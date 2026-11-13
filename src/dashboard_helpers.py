@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from src.feature_engineering import FEATURE_COLUMNS
 
 
 CUSTOMER_COLUMNS = (
@@ -66,7 +67,7 @@ MODEL_CATALOG = (
     {"name": "Logistic Regression", "type": "Classification", "implemented": False},
     {"name": "Decision Tree", "type": "Classification", "implemented": True},
     {"name": "Random Forest", "type": "Classification", "implemented": True},
-    {"name": "Gradient Boosting", "type": "Classification", "implemented": False},
+    {"name": "Gradient Boosting", "type": "Classification", "implemented": True},
     {"name": "KNN", "type": "Classification", "implemented": False},
     {"name": "SVC", "type": "Classification", "implemented": False},
     {"name": "Linear Regression", "type": "Regression", "implemented": True},
@@ -386,6 +387,89 @@ def validate_dt_predictions(data):
     return result, None
 
 
+def validate_gb_predictions(data):
+    """Validate Gradient Boosting holdout predictions."""
+    required = {"CustomerID", "CustomerRank_true", "CustomerRank_predicted"}
+    if data is None:
+        return None, "Run Gradient Boosting chưa lưu dự đoán test."
+    if data.empty:
+        return None, "Tệp dự đoán Gradient Boosting không có dòng dữ liệu."
+    missing = sorted(required - set(data.columns))
+    if missing:
+        return None, f"Tệp dự đoán Gradient Boosting thiếu cột: {', '.join(missing)}."
+    result = data.copy()
+    if result["CustomerID"].isna().any():
+        return None, "Tệp dự đoán Gradient Boosting có CustomerID bị thiếu."
+    result["CustomerID"] = result["CustomerID"].map(_normalize_customer_id)
+    if result["CustomerID"].duplicated().any():
+        return None, "Tệp dự đoán Gradient Boosting có CustomerID trùng lặp."
+    for column in ("CustomerRank_true", "CustomerRank_predicted"):
+        result[column] = result[column].astype("string").str.strip()
+        invalid = result[column].isna() | ~result[column].isin(RANK_ORDER)
+        if invalid.any():
+            return None, f"Tệp dự đoán Gradient Boosting có nhãn không hợp lệ trong {column}."
+    return result, None
+
+
+def load_gb_run(runs_dir):
+    """Load and validate the latest Gradient Boosting run artifacts."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        return None, None, None, None
+    candidates = sorted(
+        runs_dir.glob("*/ranking_metrics.csv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for metrics_path in candidates:
+        metadata_path = metrics_path.parent / "run_metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            with metadata_path.open("r", encoding="utf-8") as stream:
+                metadata = json.load(stream)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None, None, None, "Không đọc được thông tin kết quả Gradient Boosting."
+        if not isinstance(metadata, dict) or metadata.get("model") != "Gradient Boosting":
+            continue
+        predictions_path = metrics_path.parent / "test_predictions.csv"
+        if not predictions_path.is_file():
+            return metadata, None, metrics_path.parent, "Chưa có bảng dự đoán Gradient Boosting để hiển thị."
+        try:
+            raw = pd.read_csv(predictions_path)
+        except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+            return metadata, None, metrics_path.parent, "Không đọc được bảng dự đoán Gradient Boosting."
+        predictions, error = validate_gb_predictions(raw)
+        if error:
+            return metadata, None, metrics_path.parent, error
+        if metadata.get("model_type") != "Classification":
+            return metadata, None, metrics_path.parent, "Metadata Gradient Boosting có model_type không hợp lệ."
+        if not isinstance(metadata.get("n_train_customers"), int) or metadata["n_train_customers"] < 1:
+            return metadata, None, metrics_path.parent, "Metadata Gradient Boosting có kích thước tập train không hợp lệ."
+        if not isinstance(metadata.get("n_test_customers"), int) or metadata["n_test_customers"] != len(predictions):
+            return metadata, None, metrics_path.parent, "Số lượng dự đoán không khớp metadata Gradient Boosting."
+        if not metadata.get("evaluation_set_id"):
+            return metadata, None, metrics_path.parent, "Metadata Gradient Boosting thiếu evaluation_set_id."
+        if metadata.get("feature_columns") != list(FEATURE_COLUMNS):
+            return metadata, None, metrics_path.parent, "Metadata Gradient Boosting có thứ tự đặc trưng không hợp lệ."
+        try:
+            metrics = pd.read_csv(metrics_path)
+        except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+            return metadata, None, metrics_path.parent, "Không đọc được chỉ số Gradient Boosting."
+        if (
+            len(metrics) != 1
+            or "Model" not in metrics.columns
+            or metrics.iloc[0]["Model"] != "Gradient Boosting"
+            or "Evaluation_Set_ID" not in metrics.columns
+            or str(metrics.iloc[0]["Evaluation_Set_ID"]) != str(metadata["evaluation_set_id"])
+            or "Status" not in metrics.columns
+            or str(metrics.iloc[0]["Status"]).lower() != "completed"
+        ):
+            return metadata, None, metrics_path.parent, "Chỉ số và metadata Gradient Boosting không khớp."
+        return metadata, predictions, metrics_path.parent, None
+    return None, None, None, None
+
+
 def load_dt_run(runs_dir):
     """Load and validate the latest Decision Tree run artifacts."""
     runs_dir = Path(runs_dir)
@@ -439,6 +523,16 @@ def load_rf_run(runs_dir):
             return None, None, None, "Không đọc được thông tin kết quả Random Forest."
         if not isinstance(metadata, dict) or metadata.get("model") != "Random Forest":
             continue
+        if metadata.get("model_type") != "Classification":
+            return metadata, None, metrics_path.parent, "Metadata Random Forest có model_type không hợp lệ."
+        if not isinstance(metadata.get("n_train_customers"), int) or metadata["n_train_customers"] < 1:
+            return metadata, None, metrics_path.parent, "Metadata Random Forest có kích thước tập train không hợp lệ."
+        if not isinstance(metadata.get("n_test_customers"), int) or metadata["n_test_customers"] < 1:
+            return metadata, None, metrics_path.parent, "Metadata Random Forest có kích thước tập test không hợp lệ."
+        if not metadata.get("evaluation_set_id"):
+            return metadata, None, metrics_path.parent, "Metadata Random Forest thiếu evaluation_set_id."
+        if metadata.get("feature_columns") != list(FEATURE_COLUMNS):
+            return metadata, None, metrics_path.parent, "Metadata Random Forest có thứ tự đặc trưng không hợp lệ."
         predictions_path = metrics_path.parent / "test_predictions.csv"
         if not predictions_path.is_file():
             return metadata, None, metrics_path.parent, "Chưa có bảng dự đoán Random Forest để hiển thị."
@@ -446,9 +540,51 @@ def load_rf_run(runs_dir):
             raw = pd.read_csv(predictions_path)
         except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
             return metadata, None, metrics_path.parent, "Không đọc được bảng dự đoán Random Forest."
-        predictions, error = validate_dt_predictions(raw)
+        predictions, error = validate_rf_predictions(raw)
+        if error:
+            return metadata, None, metrics_path.parent, error
+        if metadata["n_test_customers"] != len(predictions):
+            return metadata, None, metrics_path.parent, "Số lượng dự đoán không khớp metadata Random Forest."
+        try:
+            raw_metrics = pd.read_csv(metrics_path)
+        except (OSError, UnicodeDecodeError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+            return metadata, None, metrics_path.parent, "Không đọc được chỉ số Random Forest."
+        metrics, _ = validate_model_results(raw_metrics)
+        if metrics is None or len(metrics) != 1:
+            return metadata, None, metrics_path.parent, "Chỉ số Random Forest thiếu hoặc không hợp lệ."
+        row = metrics.iloc[0]
+        if (
+            row["Model"] != "Random Forest"
+            or str(row["Status"]).lower() != "completed"
+            or str(row["Evaluation_Set_ID"]) != str(metadata["evaluation_set_id"])
+        ):
+            return metadata, None, metrics_path.parent, "Chỉ số và metadata Random Forest không khớp."
         return metadata, predictions, metrics_path.parent, error
     return None, None, None, None
+
+
+def validate_rf_predictions(data):
+    """Validate saved Random Forest holdout predictions."""
+    required = {"CustomerID", "CustomerRank_true", "CustomerRank_predicted"}
+    if data is None:
+        return None, "Run Random Forest chưa lưu dự đoán test."
+    if data.empty:
+        return None, "Tệp dự đoán Random Forest không có dòng dữ liệu."
+    missing = sorted(required - set(data.columns))
+    if missing:
+        return None, f"Tệp dự đoán Random Forest thiếu cột: {', '.join(missing)}."
+    result = data.copy()
+    if result["CustomerID"].isna().any():
+        return None, "Tệp dự đoán Random Forest có CustomerID bị thiếu."
+    result["CustomerID"] = result["CustomerID"].map(_normalize_customer_id)
+    if result["CustomerID"].duplicated().any():
+        return None, "Tệp dự đoán Random Forest có CustomerID trùng lặp."
+    for column in ("CustomerRank_true", "CustomerRank_predicted"):
+        result[column] = result[column].astype("string").str.strip()
+        invalid = result[column].isna() | ~result[column].isin(RANK_ORDER)
+        if invalid.any():
+            return None, f"Tệp dự đoán Random Forest có nhãn không hợp lệ trong {column}."
+    return result, None
 
 
 def _normalize_customer_id(value):
