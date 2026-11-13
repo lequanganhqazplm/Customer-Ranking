@@ -27,6 +27,8 @@ from src.dashboard_helpers import (
     validate_evaluation_report,
     validate_feature_report,
 )
+from src.evaluate import MODEL_RESULT_COLUMNS
+from src.feature_engineering import FEATURE_COLUMNS
 
 
 @pytest.fixture
@@ -158,10 +160,11 @@ def test_model_catalog_contains_exactly_ten_distinct_algorithms():
     assert len(names) == 10
     assert len(set(names)) == 10
     assert names[0] == "K-Means"
-    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 4
+    assert sum(entry["implemented"] for entry in MODEL_CATALOG) == 5
     assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Linear Regression")["implemented"] is True
     assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Decision Tree")["implemented"] is True
     assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Random Forest")["implemented"] is True
+    assert next(entry for entry in MODEL_CATALOG if entry["name"] == "Gradient Boosting")["implemented"] is True
 
 
 def test_validate_dt_predictions_checks_rank_labels_and_customer_ids():
@@ -213,9 +216,18 @@ def test_load_dt_run_reads_and_validates_latest_artifacts(tmp_path):
 def test_load_rf_run_reads_and_validates_latest_artifacts(tmp_path):
     run_path = tmp_path / "random-forest-run"
     run_path.mkdir()
-    (run_path / "ranking_metrics.csv").write_text("Model\nRandom Forest\n", encoding="utf-8")
+    pd.DataFrame([{
+        "Model": "Random Forest", "ModelType": "Classification", "Accuracy": 0.5,
+        "Precision_Macro": 0.5, "Recall_Macro": 0.5, "F1_Macro": 0.5,
+        "Balanced_Accuracy": 0.5, "Training_Time": 0.1, "Prediction_Time": 0.01,
+        "Status": "completed", "Evaluation_Set_ID": "rf-test-01",
+    }], columns=MODEL_RESULT_COLUMNS).to_csv(run_path / "ranking_metrics.csv", index=False)
     (run_path / "run_metadata.json").write_text(
-        '{"model": "Random Forest", "n_test_customers": 2}', encoding="utf-8"
+        __import__("json").dumps({
+            "model": "Random Forest", "model_type": "Classification",
+            "n_train_customers": 8, "n_test_customers": 2,
+            "evaluation_set_id": "rf-test-01", "feature_columns": list(FEATURE_COLUMNS),
+        }), encoding="utf-8"
     )
     (run_path / "test_predictions.csv").write_text(
         "CustomerID,CustomerRank_true,CustomerRank_predicted\n14646,Diamond,Gold\n14911,Bronze,Bronze\n",

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from sklearn.metrics import r2_score
+from sklearn.metrics import confusion_matrix
 
 from src.dashboard_helpers import (
     FEATURE_REPORT_COLUMNS,
@@ -18,6 +19,7 @@ from src.dashboard_helpers import (
     available_model_results,
     comparable_model_results,
     load_dt_run,
+    load_gb_run,
     load_rf_run,
     read_csv_report,
     validate_feature_report,
@@ -168,6 +170,7 @@ if customers is not None:
 rank_results, rank_result_warnings = load_ranking_results()
 rank_metadata, rank_predictions, rank_run_path, rank_run_error = load_latest_rank_run()
 dt_metadata, dt_predictions, dt_run_path, dt_run_error = load_dt_run(RUNS_DIR)
+gb_metadata, gb_predictions, gb_run_path, gb_run_error = load_gb_run(RUNS_DIR)
 rf_metadata, rf_predictions, rf_run_path, rf_run_error = load_rf_run(RUNS_DIR)
 if rank_results is not None and not rank_results.empty and (
     rank_metadata is None or rank_predictions is None or rank_run_error
@@ -183,6 +186,13 @@ if rank_results is not None and not rank_results.empty and (
     if stale_dt.any():
         rank_results = rank_results.loc[~stale_dt].reset_index(drop=True)
         rank_result_warnings.append("Decision Tree chưa có dự đoán hợp lệ nên đã được loại khỏi so sánh.")
+if rank_results is not None and not rank_results.empty and (
+    gb_metadata is None or gb_predictions is None or gb_run_error
+):
+    stale_gb = rank_results["Model"].astype(str).eq("Gradient Boosting")
+    if stale_gb.any():
+        rank_results = rank_results.loc[~stale_gb].reset_index(drop=True)
+        rank_result_warnings.append("Gradient Boosting chưa có dự đoán hợp lệ nên đã được loại khỏi so sánh.")
 if rank_results is not None and not rank_results.empty and (
     rf_metadata is None or rf_predictions is None or rf_run_error
 ):
@@ -484,6 +494,47 @@ def render_random_forest_model():
         predictions=rf_predictions,
         run_error=rf_run_error,
     )
+    if rf_predictions is not None and not rf_predictions.empty:
+        matrix = confusion_matrix(
+            rf_predictions["CustomerRank_true"],
+            rf_predictions["CustomerRank_predicted"],
+            labels=list(RANK_ORDER),
+        )
+        matrix_view = pd.DataFrame(
+            matrix,
+            index=[RANK_DISPLAY_NAMES[rank] for rank in RANK_ORDER],
+            columns=[RANK_DISPLAY_NAMES[rank] for rank in RANK_ORDER],
+        )
+        st.subheader("Ma trận nhầm lẫn")
+        st.dataframe(matrix_view, width="stretch")
+
+
+def render_gradient_boosting_model():
+    render_tree_classification_model(
+        model_title="Tăng cường gradient (Gradient Boosting)",
+        model_description=(
+            "Gradient Boosting kết hợp các cây quyết định tuần tự để giảm lỗi phân loại hạng khách hàng. "
+            "Các chỉ số dưới đây được tính trên tập kiểm tra đã lưu cùng lần chạy."
+        ),
+        model_name="Gradient Boosting",
+        metadata=gb_metadata,
+        predictions=gb_predictions,
+        run_error=gb_run_error,
+    )
+    if gb_predictions is not None and not gb_predictions.empty:
+        matrix = confusion_matrix(
+            gb_predictions["CustomerRank_true"],
+            gb_predictions["CustomerRank_predicted"],
+            labels=list(RANK_ORDER),
+        )
+        matrix_view = pd.DataFrame(
+            matrix,
+            index=[RANK_DISPLAY_NAMES[rank] for rank in RANK_ORDER],
+            columns=[RANK_DISPLAY_NAMES[rank] for rank in RANK_ORDER],
+        )
+        matrix_view.index.name = "Thực tế / Dự đoán"
+        st.subheader("Confusion matrix")
+        st.dataframe(matrix_view, width="stretch")
 
 
 def load_latest_linear_regression_run():
@@ -633,6 +684,7 @@ with st.sidebar:
             "K-Means (phân cụm)",
             "Cây quyết định (Decision Tree)",
             "Rừng ngẫu nhiên (Random Forest)",
+            "Tăng cường gradient (Gradient Boosting)",
         ]
         selected_train_model = st.selectbox("Chọn mô hình huấn luyện", trainable_models, key="ui_train_model")
 
@@ -659,6 +711,8 @@ with st.sidebar:
                             model_key = "decision_tree"
                         elif "Random Forest" in selected_train_model:
                             model_key = "random_forest"
+                        elif "Gradient Boosting" in selected_train_model:
+                            model_key = "gradient_boosting"
                         else:
                             model_key = "kmeans"
                         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -676,6 +730,18 @@ with st.sidebar:
                                 random_state=42,
                             )
                             save_decision_tree_experiment(train_result, out_dir)
+                        elif model_key == "gradient_boosting":
+                            from src.train_gradient_boosting import (
+                                run_training as run_gradient_boosting_training,
+                                save_experiment as save_gradient_boosting_experiment,
+                            )
+
+                            train_result = run_gradient_boosting_training(
+                                transactions,
+                                test_size=float(train_test_size),
+                                random_state=42,
+                            )
+                            save_gradient_boosting_experiment(train_result, out_dir)
                         elif model_key == "random_forest":
                             from src.train_random_forest import (
                                 run_training as run_random_forest_training,
@@ -766,6 +832,8 @@ elif page == "Mô hình":
         render_kmeans_model()
     elif selected == "Decision Tree":
         render_decision_tree_model()
+    elif selected == "Gradient Boosting":
+        render_gradient_boosting_model()
     elif selected == "Random Forest":
         render_random_forest_model()
     elif selected == "Linear Regression":
